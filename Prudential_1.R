@@ -2,6 +2,8 @@ library(readr)
 library(dplyr)
 library(tidyr)
 library(rstan)
+library(Matrix)
+library(xgboost)
 library(ggplot2)
 
 rstan_options(auto_write = TRUE)
@@ -16,123 +18,124 @@ sample_submission <- read_csv("data/sample_submission.csv.zip")
 names(train.full)
 
 train.full %>%
-  select(matches("^Ret_")) %>%
-  names
+  select(1:12) %>%
+  complete.cases %>%
+  sum
 
 train.full %>%
-  select(matches("Feature")) %>%
+  select(matches("Insurance_History")) %>%
   names
 
-ggplot(train.full) + geom_histogram(aes(Ret_MinusTwo), binwidth=.01)
-ggplot(train.full) + geom_histogram(aes(Ret_MinusOne), binwidth=.01)
+#complete
+train.full %>%
+  select(matches("Product_Info")) %>%
+  complete.cases %>%
+  sum
+
+train.full %>%
+  select(matches("InsuredInfo")) %>%
+  complete.cases %>%
+  sum
+
+#NOT complete
+train.full %>%
+  select(matches("Employment_Info")) %>%
+  complete.cases %>%
+  sum
+train.full %>%
+  select(matches("Insurance_History")) %>%
+  complete.cases %>%
+  sum
+
+ggplot(train.full) + geom_histogram(aes(Response))
+ggplot(train.full) + geom_histogram(aes(Medical_History_2))
+ggplot(train.full) + geom_histogram(aes(Medical_Keyword_1))
+
+table(train.full$Response)
+table(train.full$Product_Info_5)
+table(train.full$Product_Info_7)
+
+table(train.full$Family_Hist_1)
 
 summary(train.full$Ret_MinusTwo)
 summary(train.full$Ret_MinusOne)
 summary(train.full$Weight_Daily)
 
-train.full %>%
-  mutate(na.var = ifelse(is.na(Ret_PlusOne), 1, 0)) %>%
-  count(na.var)
+train.sample <- train.full %>%
+  select(2:12, -Product_Info_2, matches("InsuredInfo")) %>%
+  sample_n(1000) %>%
+  as.matrix
 
-train.full %>%
-  mutate(na.var = ifelse(is.na(Feature_2), 1, 0)) %>%
-  count(na.var)
+trainMatrix <- test.full %>%
+  select(2:12, -Product_Info_2, matches("InsuredInfo"))
 
-train.full %>%
-  mutate(na.var = ifelse(is.na(Weight_Daily), 1, 0)) %>%
-  count(na.var)
+y <- train.full %>%
+  select(Response) %>%
+  mutate(Response=Response-1) %>%
+  as.matrix
 
-ggplot(train.full) + geom_histogram(aes(Weight_Daily))
+#"rank:pairwise" 
+#"multi:softmax"
+param <- list("objective" = "multi:softprob",
+              "eval_metric" = "mlogloss",
+              "num_class" = 8, 'threads' = 4)
 
-ggplot(train.full) + geom_histogram(aes(Feature_2), binwidth=.01)
-ggplot(train.full) + geom_histogram(aes(Feature_3), binwidth=.01)
-ggplot(train.full) + geom_histogram(aes(Feature_4), binwidth=.01)
+cv.nround <- 5
+cv.nfold <- 3
 
-stan.model <- "
-  data {
-    int<lower=0> N;
-    vector [N] y;
-    vector [N] covar1;
-    vector [N] covar2;
-    vector [N] y_m2;
-    vector [N] y_m1;
+bst.cv <- xgb.cv(param=param, data = trainMatrix, label = y, 
+                 nfold = cv.nfold, nrounds = cv.nround)
 
-    //one-dimensional array of size N containing real values
-    //real y[N];
-    //real y_hat[N];
-    //vector[N] y_hat;
-  }
-  parameters {
-    //intercept
-    real alpha;
+nround <- 50
+bst <- xgboost(param=param, data = trainMatrix, label = y, nrounds=nround)
+pred <- predict(bst, as.matrix(trainMatrix))
 
-    //regression
-    real<lower=-1,upper=1> beta1;
-    real<lower=-1,upper=1> beta2;
+# Get the feature real names
+names <- dimnames(trainMatrix)[[2]]
 
-    //moving average
-    real<lower=0,upper=1> theta1;
+# Compute feature importance matrix
+importance_matrix <- xgb.importance(names, model = bst)
 
-    real<lower=0> sigma;
-  }
-  transformed parameters {
-    real<lower=0,upper=1> theta2;
-    theta2 <- 1-theta1;
-  }
-  model {
-    for (n in 1:N)
-      y[n] ~ normal(alpha + 
-                    beta1*covar1[n] + beta2*covar2[n] + 
-                    theta1*y_m1[n] + theta2*y_m2[n],
-                    sigma);
-  }
-"
-
-train_y2 <- filter(train.full, !is.na(Feature_2), 
-                   !is.na(Feature_3))
-
-dat <- list('N' = dim(train_y2)[[1]],
-            'covar1' = train_y2$Feature_2,
-            'covar2' = train_y2$Feature_3,
-            "y_m2" = train_y2$Ret_MinusTwo,
-            "y_m1" = train_y2$Ret_MinusOne,
-            'y' = train_y2$Ret_PlusOne)
-
-fit <- stan(model_code = stan.model, 
-            model_name = "Stan1", 
-            iter=2500, warmup=500,
-            thin=2, chains=4, seed=252014,
-            data = dat)
+# Nice graph
+xgb.plot.importance(importance_matrix[1:10,])
 
 
-b <- extract(fit, "beta1")$beta1
-print(fit, pars=c("beta1", "beta2", "theta1", "theta2", 'sigma'),
-      probs=c(0.5, 0.75, 0.95))
+##Create dummy vars
+train.sample <- train.full %>%
+  select(2:12, -Product_Info_2, matches("InsuredInfo")) %>%
+  sample_n(1000) %>%
+  as.matrix
 
-traceplot(fit, pars=c("beta1", "beta2", "theta1", "theta2", 'sigma'))
-stan_dens(fit, pars=c("beta1", "beta2", "theta1", "theta2"), 
-          fill="skyblue")
+train.full.sparse <- train.full %>%
+  select(Family_Hist_1, Response) %>%
+  mutate(Response=Response-1) %>%
+  sample_n(200)
 
-##############################
-#Use model file
 
-fit <- stan('stan_model_3.stan', 
-            model_name = "Stan1", 
-            iter=1500, warmup=500,
-            thin=2, chains=4, seed=252014,
-            data = dat)
-print(fit, pars=c("beta1", "beta2", "theta"),
-      probs=c(0.5, 0.75, 0.95))
-traceplot(fit, pars=c("beta1", "beta2", "theta"))
+table(train.full.sparse$Family_Hist_1)
+levels(train.full.sparse$Family_Hist_1)
+train.full.sparse <- as.data.frame(lapply(train.full.sparse, as.factor))
 
-get_elapsed_time(fit)
-get_posterior_mean(fit, pars=c("beta1", "beta2", "theta"))
+t <- sparse.model.matrix(Response~.-1, train.full.sparse)
+head(t)
 
-#gg objects
-stan_plot(fit)
-stan_trace(fit)
+##Create all dummy vars
+cat.vars <- bind_rows(train.full, test.full) %>%
+  select(Id, Family_Hist_1, Product_Info_1, Product_Info_2)
 
-stan_plot(fit, show_density=TRUE, point_est='median')
+table(cat.vars$Family_Hist_1, useNA = 'ifany')
+table(cat.vars$Product_Info_2, useNA = 'ifany')
+
+
+cat.vars <- bind_cols(cat.vars[,1], as.data.frame(lapply(cat.vars[,-1], as.factor)))
+cat.vars.sparse <- sparse.model.matrix(Id~.-1, cat.vars)
+head(cat.vars.sparse)
+str(cat.vars.sparse)
+
+cat.vars.sparse <- as.matrix(cat.vars.sparse)
+
+head(cat.vars.sparse)
+dim(cat.vars.sparse)
 
 ##############################
 #Add weights, impute values
