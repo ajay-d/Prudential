@@ -79,7 +79,9 @@ y <- train.full %>%
 #"multi:softmax"
 param <- list("objective" = "multi:softprob",
               "eval_metric" = "mlogloss",
-              "num_class" = 8, 'threads' = 4)
+              "num_class" = 8)
+
+parallel::detectCores()
 
 cv.nround <- 5
 cv.nfold <- 3
@@ -91,14 +93,22 @@ nround <- 50
 ##Better form for training data
 dtrain <- xgb.DMatrix(data = trainMatrix, label = y)
 
-bst <- xgboost(param=param, data = trainMatrix, label = y, nrounds=nround)
+bst <- xgboost(param = param, data = trainMatrix, label = y, nrounds = nround, nthread = 8)
 pred <- predict(bst, as.matrix(trainMatrix))
 
 # verbose = 1, print evaluation metric
-bst <- xgboost(data = dtrain, nrounds=nround, verbose = 1)
+bst <- xgboost(data = dtrain, nrounds = nround, verbose = 1)
 
 # verbose = 2, also print information about tree
-bst <- xgboost(data = dtrain, nrounds=nround, verbose = 2)
+bst <- xgboost(data = dtrain, nrounds = nround, verbose = 2)
+
+#linear boosting
+param <- list("objective" = "multi:softprob",
+              "eval_metric" = "mlogloss",
+              "num_class" = 8, "nthread" = 8)
+bst <- xgb.train(param = param, data = dtrain, nrounds = nround, verbose = 2)
+bst <- xgb.train(param = param, data = dtrain, nrounds = nround, verbose = 2, booster = "gblinear")
+
 
 # Get the feature real names
 names <- dimnames(trainMatrix)[[2]]
