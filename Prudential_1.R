@@ -66,8 +66,9 @@ train.sample <- train.full %>%
   sample_n(1000) %>%
   as.matrix
 
-trainMatrix <- test.full %>%
-  select(2:12, -Product_Info_2, matches("InsuredInfo"))
+trainMatrix <- train.full %>%
+  select(2:12, -Product_Info_2, matches("InsuredInfo")) %>%
+  as.matrix
 
 y <- train.full %>%
   select(Response) %>%
@@ -87,8 +88,17 @@ bst.cv <- xgb.cv(param=param, data = trainMatrix, label = y,
                  nfold = cv.nfold, nrounds = cv.nround)
 
 nround <- 50
+##Better form for training data
+dtrain <- xgb.DMatrix(data = trainMatrix, label = y)
+
 bst <- xgboost(param=param, data = trainMatrix, label = y, nrounds=nround)
 pred <- predict(bst, as.matrix(trainMatrix))
+
+# verbose = 1, print evaluation metric
+bst <- xgboost(data = dtrain, nrounds=nround, verbose = 1)
+
+# verbose = 2, also print information about tree
+bst <- xgboost(data = dtrain, nrounds=nround, verbose = 2)
 
 # Get the feature real names
 names <- dimnames(trainMatrix)[[2]]

@@ -15,3 +15,10 @@ j <- unlist(lapply(df, as.integer)) +
 x <- 1
 sparseMatrix(i = i, j = j, x = x)
 m <- as.matrix(sparseMatrix(i = i, j = j, x = x))
+
+#https://github.com/dmlc/xgboost/blob/master/R-package/vignettes/discoverYourData.Rmd
+#https://github.com/dmlc/xgboost/blob/master/R-package/vignettes/xgboostPresentation.Rmd
+
+
+#https://github.com/dmlc/xgboost/blob/master/demo/kaggle-otto/otto_train_pred.R
+#https://github.com/dmlc/xgboost/blob/master/R-package/demo/basic_walkthrough.R
