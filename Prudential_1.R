@@ -56,6 +56,7 @@ table(train.full$Product_Info_5)
 table(train.full$Product_Info_7)
 
 table(train.full$Family_Hist_1)
+table(train.full$Product_Info_4)
 
 summary(train.full$Ret_MinusTwo)
 summary(train.full$Ret_MinusOne)
