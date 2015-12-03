@@ -161,6 +161,9 @@ length(pred)
 head(pred)
 head(test.y)
 
+#http://www.real-statistics.com/reliability/cohens-kappa/
+#http://www.real-statistics.com/reliability/weighted-cohens-kappa/
+
 scores <- cbind(test.y, pred+1) %>%
   as.data.frame %>%
   setNames(c('actual', 'predicted'))
@@ -170,24 +173,30 @@ scores %>%
   spread(predicted, n)
 
 #histogram
-scores %>%
+hist <- scores %>%
   count(actual, predicted) %>%
   ungroup %>%
   complete(actual, predicted, fill=list(n=0)) %>%
-  spread(predicted, n)
+  spread(predicted, n) %>%
+  select(-actual)
+
+hist
 
 #weights
-scores %>%
+weights <- scores %>%
   count(actual, predicted) %>%
   ungroup %>%
   complete(actual, predicted, fill=list(n=0)) %>%
   mutate(N = n(),
          w = (actual-predicted)^2 / (7-1)^2) %>%
   select(-N, -n) %>%
-  spread(predicted, w)
+  spread(predicted, w) %>%
+  select(-actual)
+
+weights
 
 #expected
-scores %>%
+expected <- scores %>%
   count(actual, predicted) %>%
   ungroup %>%
   complete(actual, predicted, fill=list(n=0)) %>%
@@ -202,8 +211,11 @@ scores %>%
          expected = predicted.exp * actual.exp,
          expected.n = predicted.exp * actual.exp * N) %>%
   select(actual, predicted, expected.n) %>%
-  spread(predicted, expected.n)
+  spread(predicted, expected.n) %>%
+  select(-actual)
 
+expected
 
-
-
+num <- sum(as.matrix(weights) * as.matrix(hist))
+den <- sum(as.matrix(weights) * as.matrix(expected))
+1-num/den
