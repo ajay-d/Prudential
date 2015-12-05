@@ -168,6 +168,9 @@ scores <- cbind(test.y, pred+1) %>%
   as.data.frame %>%
   setNames(c('actual', 'predicted'))
 
+scores <- data_frame('actual' = c(1,4,2,2,5,2,5,4,5,3,1),
+                     'predicted' = c(3,4,4,4,4,4,6,7,8,9,10))
+
 scores %>%
   count(actual, predicted) %>%
   spread(predicted, n)
