@@ -1,3 +1,5 @@
+rm(list=ls(all=TRUE))
+
 library(readr)
 library(dplyr)
 library(tidyr)
@@ -9,13 +11,13 @@ library(lazyeval)
 
 options(mc.cores = parallel::detectCores(),
         stringsAsFactors = FALSE,
-        scipen = 10) 
-
-set.seed(2016)
+        scipen = 10)
 
 train.full <- read_csv("data/train.csv.zip")
 test.full <- read_csv("data/test.csv.zip")
 sample_submission <- read_csv("data/sample_submission.csv.zip")
+
+source("kappa_functions.R")
 
 #Combine test and train
 #convert categorical vars
@@ -67,6 +69,8 @@ for(i in names(all.cat.vars)) {
   
   cat.table <- bind_rows(cat.table, df)
 }
+cat.table <- cat.table %>%
+  arrange(desc(categories))
 
 ggplot(train.full) + geom_histogram(aes(Response), binwidth=.5)
 
@@ -87,12 +91,146 @@ for(i in cat.table.2$var) {
                       var = as.name(paste0(i))))
                
   all.cat.vars <- all.cat.vars %>%
-    mutate_(.dots = setNames(dots, paste(dummy.var.name))) %>%
-    select_(interp(~-(x), x=as.name(paste0(i))))
+    mutate_(.dots = setNames(dots, paste(dummy.var.name)))
+    #select_(interp(~-(x), x=as.name(paste0(i))))
   
 }
 
+#code all vars with 3 categories
+cat.table.3 <- cat.table %>%
+  filter(categories==3)
 
+for(i in cat.table.3$var) {
+  
+  cur.var.value <- cat.table.3 %>% 
+    filter(var==i)
+  
+  var.max <- all.cat.vars %>%
+    count_(i, sort=TRUE) %>%
+    filter(row_number() <= 2)
+  
+  dummy.var.name.1 <- paste(i, var.max[[1,1]], sep='.')
+  dummy.var.name.2 <- paste(i, var.max[[2,1]], sep='.')
+  
+  dots.1 <- list(interp(~as.integer(var==var.max[[1,1]]), 
+                        var = as.name(paste0(i))))
+  dots.2 <- list(interp(~as.integer(var==var.max[[2,1]]), 
+                        var = as.name(paste0(i))))
+  
+  all.cat.vars <- all.cat.vars %>%
+    mutate_(.dots = setNames(dots.1, paste(dummy.var.name.1))) %>%
+    mutate_(.dots = setNames(dots.2, paste(dummy.var.name.2)))
+  
+}
 
+#Remove old variables
+columns.to.drop <- cat.table %>%
+  filter(categories==2 | categories==3)
+columns.to.drop <- columns.to.drop$var
 
+for(i in columns.to.drop) {
+  all.cat.vars <- all.cat.vars %>%
+    select_(interp(~-(x), x=as.name(paste0(i))))
+}
+
+####build model
+train.data <- train.full %>%
+  select(Id, Response,
+         Product_Info_4, Ins_Age, Ht, Wt, BMI) %>%
+  left_join(all.cat.vars) %>%
+  select(-Product_Info_3, -Employment_Info_2, -Product_Info_2, -InsuredInfo_3)
+
+set.seed(1)
+
+train.data.model <- train.data %>%
+  sample_frac(.75) %>%
+  select(-Response)
+
+ids.in.model <- train.data.model$Id
+
+train.data.model.y <- train.data.model %>%
+  left_join(train.data, by='Id') %>%
+  select(Response) %>%
+  mutate(Response=Response-1) %>%
+  as.matrix
+
+train.data.watch <- train.data.model %>%
+  sample_frac(.25)
+
+train.data.test <- train.data %>%
+  anti_join(train.data.model, by='Id') %>%
+  select(-Id) %>%
+  as.matrix
+
+train.data.model <- train.data.model %>%
+  select(-Id) %>%
+  as.matrix
+
+train.data.watch.y <- train.data.watch %>%
+  left_join(train.data, by='Id') %>%
+  select(Response) %>%
+  mutate(Response=Response-1) %>%
+  as.matrix
+
+train.data.watch <- train.data.watch %>%
+  select(-Id) %>%
+  as.matrix
+
+dtrain <- xgb.DMatrix(data = train.data.model, label = train.data.model.y)
+dtest <- xgb.DMatrix(data = train.data.watch, label = train.data.watch.y)
+
+param.1 <- list("objective" = "multi:softmax",
+                #"eval_metric" = "mlogloss",
+                "num_class" = 8,
+                "max_depth" = 6)
+
+watchlist <- list(train=dtrain, test=dtest)
+
+nround <- 25
+
+bst.1 <- xgb.train(param = param.1, data = dtrain, 
+                   watchlist = watchlist,
+                   nrounds = nround, verbose = 1,
+                   feval = evalkappa.gbm)
+
+param.2 <- list("objective" = "multi:softmax",
+                "eval_metric" = "mlogloss",
+                "num_class" = 8,
+                "max_depth" = 10)
+
+bst.2 <- xgb.train(param = param.2, data = dtrain, 
+                   nrounds = nround, verbose = 1)
+
+pred.1 <- predict(bst.1, train.data.test)
+pred.2 <- predict(bst.2, train.data.test)
+
+#Add one
+pred.1 <- pred.1 + 1
+pred.2 <- pred.2 + 1
+
+ggplot(as.data.frame(pred.1)) + geom_histogram(aes(pred.1), binwidth=.5)
+ggplot(as.data.frame(pred.2)) + geom_histogram(aes(pred.2), binwidth=.5)
+
+test.data.actual <- train.data %>%
+  anti_join(train.data %>%
+              filter(Id %in% ids.in.model), by='Id') %>%
+  select(Response) %>%
+  as.matrix
+
+train.data.actual <- train.data %>%
+  filter(Id %in% ids.in.model) %>%
+  select(Response) %>%
+  as.matrix
+
+getinfo(dtrain, "label") + 1
+
+pred.train <- predict(bst.1, train.data.model)
+pred.train <- pred.train + 1 
+
+#training set
+evalkappa(train.data.actual, pred.train)
+evalkappa(train.data.actual, getinfo(dtrain, "label") + 1)
+
+#test set
+evalkappa(test.data.actual, pred.2)
 
