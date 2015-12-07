@@ -140,41 +140,67 @@ train.data <- train.full %>%
   left_join(all.cat.vars) %>%
   select(-Product_Info_3, -Employment_Info_2, -Product_Info_2, -InsuredInfo_3)
 
-set.seed(1)
+set.seed(100)
 
 train.data.model <- train.data %>%
   sample_frac(.75) %>%
-  select(-Response)
-
-ids.in.model <- train.data.model$Id
-
-train.data.model.y <- train.data.model %>%
-  left_join(train.data, by='Id') %>%
-  select(Response) %>%
-  mutate(Response=Response-1) %>%
-  as.matrix
+  select(-Response) %>%
+  arrange(Id)
 
 train.data.watch <- train.data.model %>%
-  sample_frac(.25)
-
-train.data.test <- train.data %>%
-  anti_join(train.data.model, by='Id') %>%
-  select(-Id) %>%
-  as.matrix
-
-train.data.model <- train.data.model %>%
-  select(-Id) %>%
-  as.matrix
+  sample_frac(.25) %>% 
+  arrange(Id)
 
 train.data.watch.y <- train.data.watch %>%
   left_join(train.data, by='Id') %>%
+  arrange(Id) %>%
   select(Response) %>%
   mutate(Response=Response-1) %>%
   as.matrix
 
+oos.test <- train.data %>%
+  anti_join(train.data.model, by='Id') %>%
+  arrange(Id)
+
+oos.test.y <- oos.test %>%
+  select(Response) %>%
+  mutate(Response=Response-1) %>%
+  as.matrix
+
+#remove watch IDs from model data
+train.data.model <- train.data.model %>%
+  anti_join(train.data.watch %>%
+              select(Id), by='Id') %>%
+  arrange(Id)
+
+train.data.model.y <- train.data.model %>%
+  left_join(train.data, by='Id') %>%
+  arrange(Id) %>%
+  select(Response) %>%
+  mutate(Response=Response-1) %>%
+  as.matrix
+  
+train.data.model <- train.data.model %>%
+  select(-Id) %>%
+  as.matrix
 train.data.watch <- train.data.watch %>%
   select(-Id) %>%
   as.matrix
+oos.test <- oos.test %>%
+  select(-Id, -Response) %>%
+  as.matrix
+
+dim(train.data.model)
+dim(train.data.model.y)
+table(train.data.model.y)/length(train.data.model.y)
+
+dim(train.data.watch)
+dim(train.data.watch.y)
+table(train.data.watch.y)/length(train.data.watch.y)
+
+dim(oos.test)
+dim(oos.test.y)
+table(oos.test.y)/length(oos.test.y)
 
 dtrain <- xgb.DMatrix(data = train.data.model, label = train.data.model.y)
 dtest <- xgb.DMatrix(data = train.data.watch, label = train.data.watch.y)
@@ -182,55 +208,60 @@ dtest <- xgb.DMatrix(data = train.data.watch, label = train.data.watch.y)
 param.1 <- list("objective" = "multi:softmax",
                 #"eval_metric" = "mlogloss",
                 "num_class" = 8,
-                "max_depth" = 6)
+                "max_depth" = 8,
+                "eta" = .1)
 
 watchlist <- list(train=dtrain, test=dtest)
 
-nround <- 25
+nround <- 100
 
 bst.1 <- xgb.train(param = param.1, data = dtrain, 
                    watchlist = watchlist,
                    nrounds = nround, verbose = 1,
-                   feval = evalkappa.gbm)
+                   feval = evalkappa.gbm, nthread = 8)
 
 param.2 <- list("objective" = "multi:softmax",
-                "eval_metric" = "mlogloss",
+                #"eval_metric" = "mlogloss",
                 "num_class" = 8,
                 "max_depth" = 10)
 
 bst.2 <- xgb.train(param = param.2, data = dtrain, 
-                   nrounds = nround, verbose = 1)
+                   nrounds = nround, verbose = 1,
+                   eval.metric = "merror", eval.metric = "mlogloss")
 
-pred.1 <- predict(bst.1, train.data.test)
-pred.2 <- predict(bst.2, train.data.test)
+bst.3 <- xgb.train(data=dtrain, max.depth=10, eta=.1, nround=50, 
+                   watchlist=watchlist, num_class=8,
+                   eval.metric = "merror", eval.metric = "mlogloss",
+                   nthread = 8, objective = "multi:softmax")
 
-#Add one
-pred.1 <- pred.1 + 1
-pred.2 <- pred.2 + 1
+pred.1 <- predict(bst.1, oos.test)
+pred.2 <- predict(bst.2, oos.test)
+pred.3 <- predict(bst.3, oos.test)
+
+table(pred.1)
+table(pred.3)
 
 ggplot(as.data.frame(pred.1)) + geom_histogram(aes(pred.1), binwidth=.5)
 ggplot(as.data.frame(pred.2)) + geom_histogram(aes(pred.2), binwidth=.5)
 
-test.data.actual <- train.data %>%
-  anti_join(train.data %>%
-              filter(Id %in% ids.in.model), by='Id') %>%
-  select(Response) %>%
-  as.matrix
-
-train.data.actual <- train.data %>%
-  filter(Id %in% ids.in.model) %>%
-  select(Response) %>%
-  as.matrix
-
-getinfo(dtrain, "label") + 1
-
-pred.train <- predict(bst.1, train.data.model)
-pred.train <- pred.train + 1 
+#getinfo(dtrain, "label") + 1
 
 #training set
-evalkappa(train.data.actual, pred.train)
-evalkappa(train.data.actual, getinfo(dtrain, "label") + 1)
+pred.train <- predict(bst.1, train.data.model)
+head(pred.train)
+table(pred.train)
+evalkappa(train.data.model.y, pred.train)
+
+#watchlist
+pred.watch<- predict(bst.1, train.data.watch)
+head(pred.watch)
+table(pred.watch)
+evalkappa(train.data.watch.y, pred.watch)
 
 #test set
-evalkappa(test.data.actual, pred.2)
+head(oos.test.y)
+head(pred.1)
+evalkappa(oos.test.y, pred.1)
+evalkappa(oos.test.y, pred.2)
+evalkappa(oos.test.y, pred.3)
 
